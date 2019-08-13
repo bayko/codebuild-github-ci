@@ -1,0 +1,796 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Github CodeBuild CI Template
+
+Parameters:
+  LambdaBucketName:
+    Type: String
+    Description: "Bucket containing the lambda packages"
+  GithubToken:
+    Type: String
+    Description: "Personal access token for Github"
+  CodebuildBucketName:
+    Type: String
+    Description: "Bucket name to use for codebuild"
+  CodebuildImage:
+    Type: String
+    Description: "ECR image uri to use with codebuild"
+  APIName:
+    Type: String
+    Description: "Name to use for the API"
+  CloudWatchDashboardName:
+    Type: String
+    Description: "Name for the CloudWatch Dashboard"
+
+Resources:
+  GithubLambdaWebhook:
+    Type: AWS::Lambda::Function
+    DependsOn:
+      - GithubLambdaWebhookRole
+      - GithubCodebuildBucket
+    Properties:
+      Description: "Triggers s3 download from github"
+      Code:
+        S3Bucket: !Ref LambdaBucketName
+        S3Key: "ci-github-webhook.zip"
+      Role: !GetAtt
+        - GithubLambdaWebhookRole
+        - Arn
+      Timeout: 60
+      Handler: lambda_function.lambda_handler
+      MemorySize: 128
+      Runtime: python3.6
+      Environment:
+        Variables:
+          GITHUB_TOKEN: !Ref GithubToken
+          TARGET_LAMBDA: !Ref GithubLambdaS3
+
+  GithubLambdaS3:
+    Type: AWS::Lambda::Function
+    DependsOn:
+      - GithubLambdaS3Role
+      - GithubCodebuildBucket
+    Properties:
+      Description: "Clones Github Repo to S3 Bucket"
+      Code:
+        S3Bucket: !Ref LambdaBucketName
+        S3Key: "ci-github-s3.zip"
+      Role: !GetAtt
+        - GithubLambdaS3Role
+        - Arn
+      Timeout: 200
+      Handler: lambda_function.lambda_handler
+      MemorySize: 128
+      Runtime: python2.7
+      Environment:
+        Variables:
+          GITHUB_TOKEN: !Ref GithubToken
+          OUTPUT_BUCKET: !Ref GithubCodebuildBucket
+
+  GithubLambdaCodebuild:
+    Type: AWS::Lambda::Function
+    DependsOn:
+      - GithubLambdaCodebuildRole
+      - GithubCodebuildProject
+    Properties:
+      Description: "Starts codebuild after repo is cloned"
+      Code:
+        S3Bucket: !Ref LambdaBucketName
+        S3Key: "ci-github-codebuild.zip"
+      Role: !GetAtt
+        - GithubLambdaCodebuildRole
+        - Arn
+      Timeout: 60
+      Handler: lambda_function.lambda_handler
+      MemorySize: 128
+      Runtime: python3.6
+      Environment:
+        Variables:
+          BUILD_PROJECT: !Ref GithubCodebuildProject
+
+  GithubLambdaInvokeCodebuild:
+    DependsOn:
+      - GithubLambdaCodebuild
+      - GithubCodebuildTrigger
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: "lambda:InvokeFunction"
+      FunctionName: !GetAtt "GithubLambdaCodebuild.Arn"
+      Principal: "events.amazonaws.com"
+      SourceArn: !GetAtt
+        - GithubCodebuildTrigger
+        - Arn
+
+  GithubLambdaStatus:
+    Type: AWS::Lambda::Function
+    DependsOn:
+      - GithubLambdaStatusRole
+    Properties:
+      Description: "Reports Status of Codebuild back to Github"
+      Code:
+        S3Bucket: !Ref LambdaBucketName
+        S3Key: "ci-github-status.zip"
+      Role: !GetAtt
+        - GithubLambdaStatusRole
+        - Arn
+      Timeout: 60
+      Handler: lambda_function.lambda_handler
+      MemorySize: 128
+      Runtime: python3.6
+      Environment:
+        Variables:
+          GITHUB_TOKEN: !Ref GithubToken
+
+  GithubLambdaInvokeStatus:
+    DependsOn:
+      - GithubLambdaStatus
+      - GithubCodebuildCheck
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: "lambda:InvokeFunction"
+      FunctionName: !GetAtt "GithubLambdaStatus.Arn"
+      Principal: "events.amazonaws.com"
+      SourceArn: !GetAtt
+        - GithubCodebuildCheck
+        - Arn
+
+  GithubLambdaWebhookRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AWSLambdaFullAccess
+        - arn:aws:iam::aws:policy/CloudWatchLogsFullAccess
+      Path: /
+      
+  GithubLambdaStatusRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AWSLambdaFullAccess
+        - arn:aws:iam::aws:policy/CloudWatchLogsFullAccess
+        - arn:aws:iam::aws:policy/AWSCodeBuildAdminAccess
+      Path: /
+
+  GithubLambdaS3Role:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonS3FullAccess
+        - arn:aws:iam::aws:policy/CloudWatchLogsFullAccess
+      Path: /
+
+  GithubLambdaCodebuildRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AWSCodeBuildAdminAccess
+        - arn:aws:iam::aws:policy/CloudWatchLogsFullAccess
+        - arn:aws:iam::aws:policy/AmazonS3FullAccess
+      Path: /
+
+  GithubCodebuildBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Ref CodebuildBucketName
+
+  GithubCodebuildBucketPolicy: 
+    DependsOn:
+      - GithubCodebuildBucket
+      - GithubLogGroup
+    Type: AWS::S3::BucketPolicy
+    Properties: 
+      Bucket: !Ref GithubCodebuildBucket
+      PolicyDocument: 
+        Version: "2012-10-17"
+        Statement: 
+          - 
+            Sid: "AWSCloudTrailAclCheck"
+            Effect: "Allow"
+            Principal: 
+              Service: "cloudtrail.amazonaws.com"
+            Action: "s3:GetBucketAcl"
+            Resource: 
+              !Sub |-
+                arn:aws:s3:::${GithubCodebuildBucket}
+          - 
+            Sid: "S3AccessPolicy"
+            Effect: "Allow"
+            Principal: 
+              Service: "codebuild.amazonaws.com"
+            Action: 
+              - "s3:GetObject"
+              - "s3:GetObjectVersion"
+              - "s3:PutObject"
+            Resource: 
+              !Sub |-
+                arn:aws:s3:::${GithubCodebuildBucket}/*
+          - 
+            Sid: "AWSCloudTrailWrite"
+            Effect: "Allow"
+            Principal: 
+              Service: "cloudtrail.amazonaws.com"
+            Action: "s3:PutObject"
+            Resource: 
+              !Sub |-
+               arn:aws:s3:::${GithubCodebuildBucket}/AWSLogs/${AWS::AccountId}/*
+               
+  GithubCodebuildBucketTrail: 
+    DependsOn: 
+      - GithubCodebuildBucketPolicy
+      - GithubLogGroup
+      - GithubLogRole
+      - GithubCodebuildBucket
+    Type: AWS::CloudTrail::Trail
+    Properties: 
+      S3BucketName: 
+        Ref: GithubCodebuildBucket
+      IsLogging: true
+      IsMultiRegionTrail: false
+      CloudWatchLogsLogGroupArn: !GetAtt GithubLogGroup.Arn
+      CloudWatchLogsRoleArn: !GetAtt GithubLogRole.Arn
+      EventSelectors:
+      - 
+        ReadWriteType: "WriteOnly"
+        IncludeManagementEvents: false
+        DataResources:
+          - 
+            Type: "AWS::S3::Object"
+            Values:
+              - 
+                !Sub "arn:aws:s3:::${GithubCodebuildBucket}/"
+
+  GithubLogGroup: 
+    Type: AWS::Logs::LogGroup
+    Properties: 
+      RetentionInDays: 7
+
+  GithubLogRole:
+    Type: AWS::IAM::Role
+    DependsOn: 
+      - GithubLogGroup
+      - GithubCodebuildBucket
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+            - cloudtrail.amazonaws.com
+          Action:
+          - sts:AssumeRole
+      Path: "/"
+      Policies:
+      - PolicyName: GithubLogRolePolicy
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Action:
+            - logs:Create*
+            - logs:PutLogEvents
+            - s3:GetObject
+            - s3:GetObjectVersion
+            - s3:PutObject
+            Effect: Allow
+            Resource:
+            - !GetAtt GithubCodebuildBucket.Arn
+            - !GetAtt GithubLogGroup.Arn
+  
+  GithubCodebuildProject:
+    Type: AWS::CodeBuild::Project
+    DependsOn: 
+      - GithubCodebuildRole
+      - GithubCodebuildBucket
+    Properties:
+      Name: "GithubCodebuild"
+      Artifacts: 
+        Type: no_artifacts
+      Description: "Builds the app from S3"
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: !Ref CodebuildImage
+      ServiceRole: !GetAtt GithubCodebuildRole.Arn
+      Source: 
+        Location: !Sub "${GithubCodebuildBucket}/owner/repo/master/repo.zip"
+        Type: S3
+
+  GithubCodebuildRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+        - Action: ['sts:AssumeRole']
+          Effect: Allow
+          Principal:
+            Service: [codebuild.amazonaws.com]
+        Version: '2012-10-17'
+      Path: /
+      Policies:
+        - PolicyName: CodeBuildAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Action:
+                - 'logs:*'
+                - 's3:GetObject'
+                - 's3:GetObjectVersion'
+                - 's3:PutObject'
+                - 'ecr:GetAuthorizationToken'
+                - 'ecr:BatchCheckLayerAvailability'
+                - 'ecr:GetDownloadUrlForLayer'
+                - 'ecr:BatchGetImage'
+                - 'ecr:GetDownloadUrlForLayer'
+                - 'ec2:CreateNetworkInterface'
+                - 'ec2:DescribeNetworkInterfaces'
+                - 'ec2:DeleteNetworkInterface'
+                - 'ec2:DescribeSubnets'
+                - 'ec2:DescribeSecurityGroups'
+                - 'ec2:DescribeDhcpOptions'
+                - 'ec2:DescribeVpcs'
+                - 'ec2:CreateNetworkInterfacePermission'
+                Effect: Allow
+                Resource: '*'
+  
+  GithubApi:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: !Ref APIName
+      Description: "API for Codebuild on webhooks for Pull requests"
+
+  GithubApiMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      HttpMethod: POST
+      ResourceId: !GetAtt GithubApi.RootResourceId
+      RestApiId: !Ref GithubApi
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub
+          - "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${lambdaArn}/invocations"
+          - lambdaArn: !GetAtt "GithubLambdaWebhook.Arn"
+
+  GithubInvoke:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: "lambda:InvokeFunction"
+      FunctionName: !GetAtt "GithubLambdaWebhook.Arn"
+      Principal: "apigateway.amazonaws.com"
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${GithubApi}/*/POST/"
+
+  GithubApiDeploy:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn:
+      - "GithubApiMethod"
+    Properties:
+      RestApiId: !Ref "GithubApi"
+      StageName: "Test"
+
+  GithubCodebuildCheck: 
+    Type: AWS::Events::Rule
+    DependsOn: GithubCodebuildProject
+    Properties: 
+      Description: "Check Codebuild Result and report back to Github"
+      EventPattern: 
+        {
+          "source": [
+            "aws.codebuild"
+          ],
+          "detail-type": [
+            "CodeBuild Build State Change"
+          ],
+          "detail": {
+            "build-status": [
+              "FAILED",
+              "STOPPED",
+              "SUCCEEDED"
+            ]
+          }
+        }
+      State: "ENABLED"
+      Targets: 
+        - 
+          Arn: 
+            Fn::GetAtt: 
+              - "GithubLambdaStatus"
+              - "Arn"
+          Id: "GithubLambdaStatus"
+
+  GithubCodebuildTrigger: 
+    Type: AWS::Events::Rule
+    DependsOn: 
+      - GithubLambdaCodebuild
+      - GithubCodebuildBucket
+    Properties: 
+      Description: "Start codebuild if download detected in CloudTrail"
+      EventPattern:
+        !Sub |
+        {
+          "source": [
+            "aws.s3"
+          ],
+          "detail-type": [
+            "AWS API Call via CloudTrail"
+          ],
+          "detail": {
+            "eventSource": [
+              "s3.amazonaws.com"
+            ],
+            "eventName": [
+              "PutObject"
+            ],
+            "requestParameters": {
+              "bucketName": [
+                "${GithubCodebuildBucket}"
+              ]
+            }
+          }
+        }
+      State: "ENABLED"
+      Targets: 
+        - 
+          Arn: 
+            Fn::GetAtt: 
+              - "GithubLambdaCodebuild"
+              - "Arn"
+          Id: "GithubLambdaCodebuild"
+  
+  GithubCodebuildDashboard:
+    Type: AWS::CloudWatch::Dashboard
+    Properties:
+      DashboardName: !Ref CloudWatchDashboardName
+      DashboardBody: 
+        !Sub |
+        {
+        "widgets":[  
+          {  
+             "type":"metric",
+             "x":18,
+             "y":0,
+             "width":6,
+             "height":6,
+             "properties":{  
+                "view":"timeSeries",
+                "stacked":true,
+                "metrics":[  
+                   [  
+                      "AWS/Lambda",
+                      "Invocations",
+                      "FunctionName",
+                      "${GithubLambdaStatus}"
+                   ],
+                   [  
+                      ".",
+                      "Errors",
+                      ".",
+                      "."
+                   ],
+                   [  
+                      ".",
+                      "Duration",
+                      ".",
+                      "."
+                   ],
+                   [  
+                      ".",
+                      "Throttles",
+                      ".",
+                      "."
+                   ]
+                ],
+                "region":"us-east-1",
+                "title":"Github Status Report"
+             }
+          },
+          {  
+             "type":"metric",
+             "x":6,
+             "y":0,
+             "width":6,
+             "height":6,
+             "properties":{  
+                "view":"timeSeries",
+                "stacked":true,
+                "metrics":[  
+                   [  
+                      "AWS/Lambda",
+                      "Throttles",
+                      "FunctionName",
+                      "${GithubLambdaS3}"
+                   ],
+                   [  
+                      ".",
+                      "Duration",
+                      ".",
+                      "."
+                   ],
+                   [  
+                      ".",
+                      "Invocations",
+                      ".",
+                      "."
+                   ],
+                   [  
+                      ".",
+                      "Errors",
+                      ".",
+                      "."
+                   ]
+                ],
+                "region":"us-east-1",
+                "title":"S3 Downloads"
+             }
+          },
+          {  
+             "type":"metric",
+             "x":12,
+             "y":0,
+             "width":6,
+             "height":6,
+             "properties":{  
+                "view":"timeSeries",
+                "stacked":true,
+                "metrics":[  
+                   [  
+                      "AWS/Lambda",
+                      "Throttles",
+                      "FunctionName",
+                      "${GithubLambdaCodebuild}"
+                   ],
+                   [  
+                      ".",
+                      "Errors",
+                      ".",
+                      "."
+                   ],
+                   [  
+                      ".",
+                      "Duration",
+                      ".",
+                      "."
+                   ],
+                   [  
+                      ".",
+                      "Invocations",
+                      ".",
+                      "."
+                   ]
+                ],
+                "region":"us-east-1",
+                "title":"Codebuild Triggers"
+             }
+          },
+          {  
+             "type":"metric",
+             "x":0,
+             "y":0,
+             "width":6,
+             "height":6,
+             "properties":{  
+                "view":"timeSeries",
+                "stacked":true,
+                "title":"Github Webhooks",
+                "metrics":[  
+                   [  
+                      "AWS/Lambda",
+                      "Throttles",
+                      "FunctionName",
+                      "${GithubLambdaWebhook}"
+                   ],
+                   [  
+                      ".",
+                      "Errors",
+                      ".",
+                      "."
+                   ],
+                   [  
+                      ".",
+                      "Invocations",
+                      ".",
+                      "."
+                   ],
+                   [  
+                      ".",
+                      "Duration",
+                      ".",
+                      "."
+                   ]
+                ],
+                "region":"us-east-1"
+             }
+          },
+          {  
+             "type":"metric",
+             "x":0,
+             "y":6,
+             "width":6,
+             "height":6,
+             "properties":{  
+                "view":"singleValue",
+                "metrics":[  
+                   [  
+                      "AWS/Lambda",
+                      "Invocations",
+                      "FunctionName",
+                      "${GithubLambdaWebhook}"
+                   ],
+                   [  
+                      ".",
+                      "Errors",
+                      ".",
+                      "."
+                   ],
+                   [  
+                      ".",
+                      "Throttles",
+                      ".",
+                      "."
+                   ],
+                   [  
+                      ".",
+                      "Duration",
+                      ".",
+                      "."
+                   ]
+                ],
+                "region":"us-east-1",
+                "title":"Github Webhooks"
+             }
+          },
+          {  
+             "type":"metric",
+             "x":6,
+             "y":6,
+             "width":6,
+             "height":6,
+             "properties":{  
+                "view":"singleValue",
+                "metrics":[  
+                   [  
+                      "AWS/Lambda",
+                      "Invocations",
+                      "FunctionName",
+                      "${GithubLambdaS3}"
+                   ],
+                   [  
+                      ".",
+                      "Throttles",
+                      ".",
+                      "."
+                   ],
+                   [  
+                      ".",
+                      "Duration",
+                      ".",
+                      "."
+                   ],
+                   [  
+                      ".",
+                      "Errors",
+                      ".",
+                      "."
+                   ]
+                ],
+                "region":"us-east-1",
+                "title":"S3 Downloads"
+             }
+          },
+          {  
+             "type":"metric",
+             "x":12,
+             "y":6,
+             "width":6,
+             "height":6,
+             "properties":{  
+                "view":"singleValue",
+                "metrics":[  
+                   [  
+                      "AWS/Lambda",
+                      "Throttles",
+                      "FunctionName",
+                      "${GithubLambdaCodebuild}"
+                   ],
+                   [  
+                      ".",
+                      "Errors",
+                      ".",
+                      "."
+                   ],
+                   [  
+                      ".",
+                      "Duration",
+                      ".",
+                      "."
+                   ],
+                   [  
+                      ".",
+                      "Invocations",
+                      ".",
+                      "."
+                   ]
+                ],
+                "region":"us-east-1",
+                "title":"Codebuild Triggers"
+             }
+          },
+          {  
+             "type":"metric",
+             "x":18,
+             "y":6,
+             "width":6,
+             "height":6,
+             "properties":{  
+                "view":"singleValue",
+                "metrics":[  
+                   [  
+                      "AWS/Lambda",
+                      "Invocations",
+                      "FunctionName",
+                      "${GithubLambdaStatus}"
+                   ],
+                   [  
+                      ".",
+                      "Errors",
+                      ".",
+                      "."
+                   ],
+                   [  
+                      ".",
+                      "Duration",
+                      ".",
+                      "."
+                   ],
+                   [  
+                      ".",
+                      "Throttles",
+                      ".",
+                      "."
+                   ]
+                ],
+                "region":"us-east-1",
+                "title":"Github Status Update"
+             }
+          }
+        ]
+        }
+
+Outputs:
+  GithubApiUrl:
+    Value: !Sub "https://${GithubApi}.execute-api.${AWS::Region}.amazonaws.com/Test"
