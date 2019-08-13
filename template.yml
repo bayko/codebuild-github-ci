@@ -207,6 +207,8 @@ Resources:
     Type: AWS::S3::Bucket
     Properties:
       BucketName: !Ref CodebuildBucketName
+      LoggingConfiguration:
+        LogFilePrefix: !Ref CodebuildBucketName
 
   GithubCodebuildBucketPolicy: 
     DependsOn:
@@ -301,7 +303,9 @@ Resources:
           Version: '2012-10-17'
           Statement:
           - Action:
-            - logs:Create*
+            - logs:CreateLogGroup
+            - logs:CreateLogStream
+            - logs:CreateExportTask
             - logs:PutLogEvents
             - s3:GetObject
             - s3:GetObjectVersion
@@ -347,7 +351,12 @@ Resources:
             Version: '2012-10-17'
             Statement:
               - Action:
-                - 'logs:*'
+                - 'logs:CreateLogGroup'
+                - 'logs:CreateLogStream'
+                - 'logs:CreateExportTask'
+                - 'logs:PutLogEvents'
+                - 'logs:GetLogEvents'
+                - 'logs:FilterLogEvents'
                 - 's3:GetObject'
                 - 's3:GetObjectVersion'
                 - 's3:PutObject'
