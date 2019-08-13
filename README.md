@@ -1,7 +1,7 @@
 # Github - CodeBuild - CI Pipeline
 
 This CloudFormation template will launch a continuous integration pipeline for Github using AWS Codebuild.
-- New or Updated pull request webhooks trigger status update update and source download to s3
+- New or Updated pull request webhooks trigger a status update and source download to s3
 - Codebuild is run using source version detected in s3
 - Build status and log URL is reported back to Github on completion
 
