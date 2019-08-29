@@ -15,6 +15,8 @@ def lambda_handler( event, context ):
   bucket = s3.Bucket(event['detail']['requestParameters']['bucketName'])
   key = event['detail']['requestParameters']['key']
   sha = key.split("/")[3]
+  if "bundler" in sha:
+    sha = key.split("/")[5]
   logger.info(key)
   objs = list(bucket.objects.filter(Prefix=key))  
   bucket_name = event['detail']['requestParameters']['bucketName']
