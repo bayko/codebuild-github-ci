@@ -207,6 +207,7 @@ Resources:
     Type: AWS::S3::Bucket
     Properties:
       BucketName: !Ref CodebuildBucketName
+      AccessControl: LogDeliveryWrite
       LoggingConfiguration:
         LogFilePrefix: !Ref CodebuildBucketName
 
