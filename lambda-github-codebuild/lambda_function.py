@@ -15,10 +15,14 @@ def lambda_handler( event, context ):
   bucket = s3.Bucket(event['detail']['requestParameters']['bucketName'])
   key = event['detail']['requestParameters']['key']
   sha = key.split("/")[3]
+  branch = key.split("/")[2]
+
   if "bundler" in sha:
     sha = key.split("/")[5]
+    branch = key.split("/")[4]
+
   logger.info(key)
-  objs = list(bucket.objects.filter(Prefix=key))  
+  objs = list(bucket.objects.filter(Prefix=key))
   bucket_name = event['detail']['requestParameters']['bucketName']
   source = (bucket_name + "/" + key)
   logger.info(source)
@@ -32,17 +36,20 @@ def lambda_handler( event, context ):
             'name': 'GIT_COMMIT_SHA',
             'value': sha,
             'type': 'PLAINTEXT'
+          }, {
+            'name': 'GIT_BRANCH',
+            'value': branch,
+            'type': 'PLAINTEXT'
           }
         ],
         'sourceTypeOverride': 'S3',
         'sourceLocationOverride': source
       }
       cb.start_build( **build )
-      print ("Successfully launched build.")  
-      return ("Successfully launched build.")     
+      print ("Successfully launched build.")
+      return ("Successfully launched build.")
     else:
       print ("File uploaded was not a zip.. ignoring")
-      
   else:
     print ("Couldnt detect build source in S3.")
     return ("Couldnt detect build source in S3.")
